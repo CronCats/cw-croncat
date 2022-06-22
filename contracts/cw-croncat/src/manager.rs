@@ -30,9 +30,11 @@ impl<'a> CwCroncat<'a> {
 
         // only registered agent signed, because micropayments will benefit long term
         let agent_opt = self.agents.may_load(deps.storage, info.sender.clone())?;
-        if agent_opt.is_none() {
+        let agent = if let Some(agent) = agent_opt {
+            agent
+        } else {
             return Err(ContractError::AgentNotRegistered {});
-        }
+        };
         let active_agents: Vec<Addr> = self
             .agent_active_queue
             .may_load(deps.storage)?
@@ -42,7 +44,6 @@ impl<'a> CwCroncat<'a> {
         if !active_agents.contains(&info.sender) {
             return Err(ContractError::AgentNotRegistered {});
         }
-        let agent = agent_opt.unwrap();
 
         // get slot items, find the next task hash available
         // if empty slot found, let agent get paid for helping keep house clean
@@ -316,7 +317,7 @@ mod tests {
     use cw_multi_test::{App, AppBuilder, Contract, ContractWrapper, Executor};
     // use cw20::Balance;
     use crate::helpers::CwTemplateContract;
-    use cw_croncat_core::msg::{ExecuteMsg, InstantiateMsg, TaskRequest};
+    use cw_croncat_core::msg::{ExecuteMsg, InstantiateMsg, TaskRequest, UpdateSettings};
     use cw_croncat_core::types::{Action, Boundary, BoundarySpec, Interval};
 
     pub fn contract_template() -> Box<dyn Contract<Empty>> {
@@ -433,15 +434,17 @@ mod tests {
 
         // Create task paused
         let change_settings_msg = ExecuteMsg::UpdateSettings {
-            paused: Some(true),
-            owner_id: None,
-            // treasury_id: None,
-            agent_fee: None,
-            min_tasks_per_agent: None,
-            agents_eject_threshold: None,
-            gas_price: None,
-            proxy_callback_gas: None,
-            slot_granularity: None,
+            update_settings: UpdateSettings {
+                paused: Some(true),
+                owner_id: None,
+                // treasury_id: None,
+                agent_fee: None,
+                min_tasks_per_agent: None,
+                agents_eject_threshold: None,
+                gas_price: None,
+                proxy_callback_gas: None,
+                slot_granularity: None,
+            },
         };
         app.execute_contract(
             Addr::unchecked(ADMIN),
@@ -469,15 +472,17 @@ mod tests {
             Addr::unchecked(ADMIN),
             contract_addr.clone(),
             &ExecuteMsg::UpdateSettings {
-                paused: Some(false),
-                owner_id: None,
-                // treasury_id: None,
-                agent_fee: None,
-                min_tasks_per_agent: None,
-                agents_eject_threshold: None,
-                gas_price: None,
-                proxy_callback_gas: None,
-                slot_granularity: None,
+                update_settings: UpdateSettings {
+                    paused: Some(false),
+                    owner_id: None,
+                    // treasury_id: None,
+                    agent_fee: None,
+                    min_tasks_per_agent: None,
+                    agents_eject_threshold: None,
+                    gas_price: None,
+                    proxy_callback_gas: None,
+                    slot_granularity: None,
+                },
             },
             &vec![],
         )

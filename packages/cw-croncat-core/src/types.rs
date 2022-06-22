@@ -270,35 +270,31 @@ impl GenericBalance {
             }
         };
     }
-    pub fn minus_tokens(&mut self, minus: Balance) {
-        match minus {
-            Balance::Native(balance) => {
-                for token in balance.0 {
-                    let index = self.native.iter().enumerate().find_map(|(i, exist)| {
-                        if exist.denom == token.denom {
-                            Some(i)
-                        } else {
-                            None
-                        }
-                    });
-                    if let Some(idx) = index {
-                        self.native[idx].amount -= token.amount
-                    }
+    pub fn minus_tokens(&mut self, balance: &Vec<Coin>) {
+        for token in balance {
+            let index = self.native.iter().enumerate().find_map(|(i, exist)| {
+                if exist.denom == token.denom {
+                    Some(i)
+                } else {
+                    None
                 }
+            });
+            if let Some(idx) = index {
+                self.native[idx].amount -= token.amount
             }
-            Balance::Cw20(token) => {
-                let index = self.cw20.iter().enumerate().find_map(|(i, exist)| {
-                    if exist.address == token.address {
-                        Some(i)
-                    } else {
-                        None
-                    }
-                });
-                if let Some(idx) = index {
-                    self.cw20[idx].amount -= token.amount
-                }
+        }
+    }
+    pub fn minus_cw20tokens(&mut self, token: &Cw20CoinVerified) {
+        let index = self.cw20.iter().enumerate().find_map(|(i, exist)| {
+            if exist.address == token.address {
+                Some(i)
+            } else {
+                None
             }
-        };
+        });
+        if let Some(idx) = index {
+            self.cw20[idx].amount -= token.amount
+        }
     }
 }
 fn get_next_block_limited(env: Env, boundary: Boundary) -> (u64, SlotType) {

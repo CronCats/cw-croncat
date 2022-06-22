@@ -97,7 +97,9 @@ impl<'a> CwCroncat<'a> {
         msg: ExecuteMsg,
     ) -> Result<Response, ContractError> {
         match msg {
-            ExecuteMsg::UpdateSettings { .. } => self.update_settings(deps, info, msg),
+            ExecuteMsg::UpdateSettings { update_settings } => {
+                self.update_settings(deps, info, update_settings)
+            }
             ExecuteMsg::MoveBalances {
                 balances,
                 account_id,

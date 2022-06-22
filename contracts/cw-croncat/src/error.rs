@@ -30,6 +30,9 @@ pub enum ContractError {
     #[error("Not a registered agent")]
     AgentUnregistered {},
 
+    #[error("Insufficient funds")]
+    NotEnoughFunds {},
+
     #[error("Custom Error val: {val:?}")]
     CustomError { val: String },
     // Add any other custom errors you like here.

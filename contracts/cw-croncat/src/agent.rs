@@ -5,7 +5,6 @@ use cosmwasm_std::{
     has_coins, Addr, Coin, Deps, DepsMut, Env, MessageInfo, Response, StdError, StdResult, Storage,
     SubMsg,
 };
-use cw20::Balance;
 use std::ops::Div;
 
 use cw_croncat_core::msg::{GetAgentIdsResponse, GetAgentTasksResponse};
@@ -128,21 +127,15 @@ impl<'a> CwCroncat<'a> {
             &Coin::new(u128::from(unit_cost), c.native_denom),
         ) || agent_wallet_balances.is_empty()
         {
-            return Err(ContractError::CustomError {
-                val: "Insufficient funds".to_string(),
-            });
+            return Err(ContractError::NotEnoughFunds {});
         }
 
         let payable_id = payable_account_id.unwrap_or_else(|| account.clone());
 
-        let mut active_agents: Vec<Addr> = self
-            .agent_active_queue
-            .may_load(deps.storage)?
-            .unwrap_or_default();
-        let total_agents = active_agents.len();
-        let agent_status = if total_agents == 0 {
-            active_agents.push(account.clone());
-            self.agent_active_queue.save(deps.storage, &active_agents)?;
+        let active_agents: Option<Vec<Addr>> = self.agent_active_queue.may_load(deps.storage)?;
+        let agent_status = if active_agents.is_none() {
+            self.agent_active_queue
+                .save(deps.storage, &[account.clone()].to_vec())?;
             AgentStatus::Active
         } else {
             let mut pending_agents = self
@@ -195,7 +188,7 @@ impl<'a> CwCroncat<'a> {
         let c: Config = self.config.load(deps.storage)?;
         if c.paused {
             return Err(ContractError::ContractPaused {
-                val: "Register agent paused".to_string(),
+                val: "Update agent paused".to_string(),
             });
         }
 
@@ -204,10 +197,9 @@ impl<'a> CwCroncat<'a> {
             info.sender,
             |a: Option<Agent>| -> Result<_, ContractError> {
                 match a {
-                    Some(agent) => {
-                        let mut ag = agent;
-                        ag.payable_account_id = payable_account_id;
-                        Ok(ag)
+                    Some(mut agent) => {
+                        agent.payable_account_id = payable_account_id;
+                        Ok(agent)
                     }
                     None => Err(ContractError::AgentUnregistered {}),
                 }
@@ -224,22 +216,23 @@ impl<'a> CwCroncat<'a> {
         info: MessageInfo,
     ) -> Result<Vec<SubMsg>, ContractError> {
         let a = self.agents.may_load(storage, info.sender)?;
-        if a.is_none() {
+        let agent = if let Some(agent) = a {
+            agent
+        } else {
             return Err(ContractError::AgentUnregistered {});
-        }
-        let agent = a.unwrap();
+        };
 
         // This will send all token balances to Agent
         let (messages, balances) = send_tokens(&agent.payable_account_id, &agent.balance)?;
-        let mut config = self.config.load(storage)?;
-        config
-            .available_balance
-            .minus_tokens(Balance::from(balances.native));
-        // TODO: Finish:
-        // config
-        //     .available_balance
-        //     .minus_tokens(Balance::from(balances.cw20));
-        self.config.save(storage, &config)?;
+        self.config
+            .update(storage, |mut config| -> Result<_, ContractError> {
+                config.available_balance.minus_tokens(&balances.native);
+                // TODO: Finish:
+                // config
+                //     .available_balance
+                //     .minus_tokens(Balance::from(balances.cw20))
+                Ok(config)
+            })?;
 
         Ok(messages)
     }
@@ -278,14 +271,10 @@ impl<'a> CwCroncat<'a> {
             });
         };
         // Agent must be in the pending queue
-        let pending_queue = self
-            .agent_pending_queue
-            .may_load(deps.storage)?
-            .unwrap_or_default();
+        let pending_queue = self.agent_pending_queue.may_load(deps.storage)?;
         // Get the position in the pending queue
-        if let Some(agent_position) = pending_queue
-            .iter()
-            .position(|address| address == &info.sender)
+        if let Some(agent_position) =
+            pending_queue.and_then(|p_q| p_q.iter().position(|address| address == &info.sender))
         {
             // It works out such that the time difference between when this is called,
             // and the agent nomination begin time can be divided by the nomination
@@ -350,11 +339,7 @@ impl<'a> CwCroncat<'a> {
             .add_attribute("method", "unregister_agent")
             .add_attribute("account_id", agent_id);
 
-        if messages.is_empty() {
-            Ok(responses)
-        } else {
-            Ok(responses.add_submessages(messages))
-        }
+        Ok(responses.add_submessages(messages))
     }
 }
 
@@ -365,7 +350,9 @@ mod tests {
     use crate::helpers::CwTemplateContract;
     use cosmwasm_std::testing::{mock_env, mock_info, MOCK_CONTRACT_ADDR};
     use cosmwasm_std::{coin, coins, from_slice, Addr, BlockInfo, CosmosMsg, Empty, StakingMsg};
-    use cw_croncat_core::msg::{ExecuteMsg, InstantiateMsg, QueryMsg, TaskRequest, TaskResponse};
+    use cw_croncat_core::msg::{
+        ExecuteMsg, InstantiateMsg, QueryMsg, TaskRequest, TaskResponse, UpdateSettings,
+    };
     use cw_croncat_core::types::{Action, Boundary, Interval};
     use cw_multi_test::{App, AppBuilder, AppResponse, Contract, ContractWrapper, Executor};
 
@@ -628,15 +615,17 @@ mod tests {
 
         // Test Can't register if contract is paused
         let payload_1 = ExecuteMsg::UpdateSettings {
-            paused: Some(true),
-            owner_id: None,
-            // treasury_id: None,
-            agent_fee: None,
-            min_tasks_per_agent: None,
-            agents_eject_threshold: None,
-            gas_price: None,
-            proxy_callback_gas: None,
-            slot_granularity: None,
+            update_settings: UpdateSettings {
+                paused: Some(true),
+                owner_id: None,
+                // treasury_id: None,
+                agent_fee: None,
+                min_tasks_per_agent: None,
+                agents_eject_threshold: None,
+                gas_price: None,
+                proxy_callback_gas: None,
+                slot_granularity: None,
+            },
         };
 
         app.execute_contract(
@@ -658,15 +647,17 @@ mod tests {
 
         // Test wallet rejected if doesnt have enough funds
         let payload_2 = ExecuteMsg::UpdateSettings {
-            paused: Some(false),
-            owner_id: None,
-            // treasury_id: None,
-            agent_fee: None,
-            min_tasks_per_agent: None,
-            agents_eject_threshold: None,
-            gas_price: None,
-            proxy_callback_gas: None,
-            slot_granularity: None,
+            update_settings: UpdateSettings {
+                paused: Some(false),
+                owner_id: None,
+                // treasury_id: None,
+                agent_fee: None,
+                min_tasks_per_agent: None,
+                agents_eject_threshold: None,
+                gas_price: None,
+                proxy_callback_gas: None,
+                slot_granularity: None,
+            },
         };
 
         app.execute_contract(
@@ -680,9 +671,7 @@ mod tests {
             .execute_contract(Addr::unchecked(AGENT0), contract_addr.clone(), &msg, &[])
             .unwrap_err();
         assert_eq!(
-            ContractError::CustomError {
-                val: "Insufficient funds".to_string()
-            },
+            ContractError::NotEnoughFunds {},
             rereg_err.downcast().unwrap()
         );
     }
