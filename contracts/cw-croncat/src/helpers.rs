@@ -64,15 +64,15 @@ impl<'a> CwCroncat<'a> {
         storage: &dyn Storage,
         env: Env,
         account_id: Addr,
+        active: &Vec<Addr>,
     ) -> Result<AgentStatus, ContractError> {
-        let c: Config = self.config.load(storage)?;
-        let block_time = env.block.time.seconds();
         // Check for active
-        let active = self.agent_active_queue.load(storage)?;
         if active.contains(&account_id) {
             return Ok(AgentStatus::Active);
         }
 
+        let c: Config = self.config.load(storage)?;
+        let block_time = env.block.time.seconds();
         // Pending
         let pending: Vec<Addr> = self.agent_pending_queue.load(storage)?;
         // If agent is pending, Check if they should get nominated to checkin to become active
@@ -83,7 +83,7 @@ impl<'a> CwCroncat<'a> {
             let total_tasks = self
                 .task_total(storage)
                 .expect("Unexpected issue getting task total");
-            let num_active_agents = self.agent_active_queue.load(storage).unwrap().len() as u64;
+            let num_active_agents = self.agent_active_queue.load(storage)?.len() as u64;
             let agent_position = pending
                 .iter()
                 .position(|address| address == &account_id)

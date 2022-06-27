@@ -253,7 +253,7 @@ impl GenericBalance {
             }
         }
     }
-    
+
     pub fn add_cw20tokens(&mut self, token: &Cw20CoinVerified) {
         let index = self.cw20.iter().enumerate().find_map(|(i, exist)| {
             if exist.address == token.address {

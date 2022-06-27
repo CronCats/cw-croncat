@@ -1,7 +1,8 @@
 use crate::error::ContractError;
 use crate::state::{Config, CwCroncat, QueueItem};
 use cosmwasm_std::{
-    Addr, DepsMut, Empty, Env, MessageInfo, Reply, Response, StdResult, Storage, SubMsg, SubMsgResult,
+    Addr, DepsMut, Empty, Env, MessageInfo, Reply, Response, StdResult, Storage, SubMsg,
+    SubMsgResult,
 };
 use cw_croncat_core::types::{Agent, SlotType};
 

@@ -19,37 +19,32 @@ impl<'a> CwCroncat<'a> {
         env: Env,
         account_id: Addr,
     ) -> StdResult<Option<AgentResponse>> {
-        let agent = self.agents.may_load(deps.storage, account_id.clone())?;
-        if agent.is_none() {
+        let agent = if let Some(a) = self.agents.may_load(deps.storage, account_id.clone())? {
+            a
+        } else {
             return Ok(None);
-        }
-        let active: Vec<Addr> = self.agent_active_queue.load(deps.storage)?;
-        let a = agent.unwrap();
-        let mut agent_response = AgentResponse {
-            status: AgentStatus::Pending, // Simple default
-            payable_account_id: a.payable_account_id,
-            balance: a.balance,
-            total_tasks_executed: a.total_tasks_executed,
-            last_missed_slot: a.last_missed_slot,
-            register_start: a.register_start,
         };
+        let active: Vec<Addr> = self.agent_active_queue.load(deps.storage)?;
 
-        if active.contains(&account_id) {
-            agent_response.status = AgentStatus::Active;
-            return Ok(Some(agent_response));
-        }
-
-        let agent_status = self.get_agent_status(deps.storage, env, account_id);
+        let agent_status = self.get_agent_status(deps.storage, env, account_id, &active);
 
         // Return wrapped error if there was a problem
-        if agent_status.is_err() {
-            return Err(StdError::GenericErr {
-                msg: agent_status.err().unwrap().to_string(),
-            });
+        match agent_status {
+            Err(error) => Err(StdError::GenericErr {
+                msg: error.to_string(),
+            }),
+            Ok(status) => {
+                let agent_response = AgentResponse {
+                    status,
+                    payable_account_id: agent.payable_account_id,
+                    balance: agent.balance,
+                    total_tasks_executed: agent.total_tasks_executed,
+                    last_missed_slot: agent.last_missed_slot,
+                    register_start: agent.register_start,
+                };
+                Ok(Some(agent_response))
+            }
         }
-
-        agent_response.status = agent_status.expect("Should have valid agent status");
-        Ok(Some(agent_response))
     }
 
     /// Get a list of agent addresses
@@ -1038,10 +1033,6 @@ mod tests {
             .unwrap();
         assert_eq!(0, res_init.messages.len());
 
-        let mut agent_status_res =
-            contract.get_agent_status(&deps.storage, mock_env(), Addr::unchecked(AGENT0));
-        assert_eq!(Err(ContractError::AgentUnregistered {}), agent_status_res);
-
         let agent_active_queue_opt: Vec<Addr> =
             match deps.storage.get("agent_active_queue".as_bytes()) {
                 Some(vec) => from_slice(vec.as_ref()).expect("Could not load agent active queue"),
@@ -1054,6 +1045,17 @@ mod tests {
             "Should not have an active queue yet"
         );
 
+        let mut agent_status_res = contract.get_agent_status(
+            &deps.storage,
+            mock_env(),
+            Addr::unchecked(AGENT0),
+            &contract
+                .agent_active_queue
+                .load(deps.as_ref().storage)
+                .unwrap(),
+        );
+        assert_eq!(Err(ContractError::AgentUnregistered {}), agent_status_res);
+
         // First registered agent becomes active
         let mut register_agent_res = contract_register_agent(AGENT0, &mut contract, deps.as_mut());
         assert!(
@@ -1061,8 +1063,15 @@ mod tests {
             "Registering agent should succeed"
         );
 
-        agent_status_res =
-            contract.get_agent_status(&deps.storage, mock_env(), Addr::unchecked(AGENT0));
+        agent_status_res = contract.get_agent_status(
+            &deps.storage,
+            mock_env(),
+            Addr::unchecked(AGENT0),
+            &contract
+                .agent_active_queue
+                .load(deps.as_ref().storage)
+                .unwrap(),
+        );
         assert_eq!(AgentStatus::Active, agent_status_res.unwrap());
 
         // Add two tasks
@@ -1079,8 +1088,15 @@ mod tests {
             register_agent_res.is_ok(),
             "Registering agent should succeed"
         );
-        agent_status_res =
-            contract.get_agent_status(&deps.storage, mock_env(), Addr::unchecked(AGENT1));
+        agent_status_res = contract.get_agent_status(
+            &deps.storage,
+            mock_env(),
+            Addr::unchecked(AGENT1),
+            &contract
+                .agent_active_queue
+                .load(deps.as_ref().storage)
+                .unwrap(),
+        );
         assert_eq!(
             AgentStatus::Pending,
             agent_status_res.unwrap(),
@@ -1096,8 +1112,15 @@ mod tests {
         assert!(res_add_task.is_ok(), "Adding task should succeed.");
 
         // Agent status is nominated
-        agent_status_res =
-            contract.get_agent_status(&deps.storage, mock_env(), Addr::unchecked(AGENT1));
+        agent_status_res = contract.get_agent_status(
+            &deps.storage,
+            mock_env(),
+            Addr::unchecked(AGENT1),
+            &contract
+                .agent_active_queue
+                .load(deps.as_ref().storage)
+                .unwrap(),
+        );
         assert_eq!(
             AgentStatus::Nominated,
             agent_status_res.unwrap(),

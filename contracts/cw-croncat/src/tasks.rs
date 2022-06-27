@@ -455,9 +455,7 @@ impl<'a> CwCroncat<'a> {
         // Add the attached balance into available_balance
         self.config
             .update(deps.storage, |mut config| -> Result<_, ContractError> {
-                config
-                    .available_balance
-                    .add_tokens(&info.funds.clone());
+                config.available_balance.add_tokens(&info.funds.clone());
                 Ok(config)
             })?;
 
