@@ -64,7 +64,7 @@ impl<'a> CwCroncat<'a> {
         storage: &dyn Storage,
         env: Env,
         account_id: Addr,
-        active: &Vec<Addr>,
+        active: &[Addr],
     ) -> Result<AgentStatus, ContractError> {
         // Check for active
         if active.contains(&account_id) {

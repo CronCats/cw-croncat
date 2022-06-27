@@ -238,7 +238,7 @@ impl Task {
 }
 
 impl GenericBalance {
-    pub fn add_tokens(&mut self, balance: &Vec<Coin>) {
+    pub fn add_tokens(&mut self, balance: &[Coin]) {
         for token in balance {
             let index = self.native.iter().enumerate().find_map(|(i, exist)| {
                 if exist.denom == token.denom {
@@ -268,7 +268,7 @@ impl GenericBalance {
         }
     }
 
-    pub fn minus_tokens(&mut self, balance: &Vec<Coin>) {
+    pub fn minus_tokens(&mut self, balance: &[Coin]) {
         for token in balance {
             let index = self.native.iter().enumerate().find_map(|(i, exist)| {
                 if exist.denom == token.denom {
