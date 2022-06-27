@@ -6,7 +6,6 @@ use cosmwasm_std::{
     to_binary, Binary, Coin, Deps, DepsMut, Env, MessageInfo, Reply, Response, StdResult,
 };
 use cw2::set_contract_version;
-use cw20::Balance;
 use cw_croncat_core::msg::{ExecuteMsg, InstantiateMsg, QueryMsg};
 
 // version info for migration info
@@ -27,8 +26,8 @@ impl<'a> CwCroncat<'a> {
 
         // keep tally of balances initialized
         let state_balances = deps.querier.query_all_balances(&env.contract.address)?;
-        available_balance.add_tokens(Balance::from(state_balances));
-        available_balance.add_tokens(Balance::from(info.funds.clone()));
+        available_balance.add_tokens(&state_balances);
+        available_balance.add_tokens(&info.funds);
 
         let owner_acct = msg.owner_id.unwrap_or_else(|| info.sender.clone());
         assert!(
@@ -165,7 +164,7 @@ impl<'a> CwCroncat<'a> {
 
         // If contract_addr matches THIS contract, it is the proxy callback
         // proxy_callback is also responsible for handling reply modes: "handle_failure", "handle_success"
-        if item.contract_addr.is_some() && item.contract_addr.unwrap() == env.contract.address {
+        if item.contract_addr.as_ref() == Some(&env.contract.address) {
             return self.proxy_callback(deps, env, msg, item.task_hash.unwrap());
         }
 

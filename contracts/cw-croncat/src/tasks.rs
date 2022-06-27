@@ -4,7 +4,6 @@ use crate::state::{Config, CwCroncat};
 use cosmwasm_std::{
     coin, Addr, BankMsg, Coin, Deps, DepsMut, Env, MessageInfo, Order, Response, StdResult, SubMsg,
 };
-use cw20::Balance;
 use cw_croncat_core::msg::{TaskRequest, TaskResponse};
 use cw_croncat_core::types::{SlotType, Task};
 
@@ -331,7 +330,7 @@ impl<'a> CwCroncat<'a> {
 
         // Add the attached balance into available_balance
         let mut c: Config = self.config.load(deps.storage)?;
-        c.available_balance.add_tokens(Balance::from(info.funds));
+        c.available_balance.add_tokens(&info.funds);
 
         // If the creation of this task means we'd like another agent, update config
         let min_tasks_per_agent = c.min_tasks_per_agent;
@@ -466,7 +465,7 @@ impl<'a> CwCroncat<'a> {
             .update(deps.storage, |mut config| -> Result<_, ContractError> {
                 config
                     .available_balance
-                    .add_tokens(Balance::from(info.funds.clone()));
+                    .add_tokens(&info.funds.clone());
                 Ok(config)
             })?;
 

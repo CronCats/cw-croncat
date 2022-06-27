@@ -2,7 +2,7 @@ use cosmwasm_std::{
     Addr, BankMsg, Binary, Coin, CosmosMsg, Empty, Env, GovMsg, IbcMsg, Timestamp, WasmMsg,
 };
 use cron_schedule::Schedule;
-use cw20::{Balance, Cw20CoinVerified};
+use cw20::Cw20CoinVerified;
 use hex::encode;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -238,38 +238,36 @@ impl Task {
 }
 
 impl GenericBalance {
-    pub fn add_tokens(&mut self, add: Balance) {
-        match add {
-            Balance::Native(balance) => {
-                for token in balance.0 {
-                    let index = self.native.iter().enumerate().find_map(|(i, exist)| {
-                        if exist.denom == token.denom {
-                            Some(i)
-                        } else {
-                            None
-                        }
-                    });
-                    match index {
-                        Some(idx) => self.native[idx].amount += token.amount,
-                        None => self.native.push(token),
-                    }
+    pub fn add_tokens(&mut self, balance: &Vec<Coin>) {
+        for token in balance {
+            let index = self.native.iter().enumerate().find_map(|(i, exist)| {
+                if exist.denom == token.denom {
+                    Some(i)
+                } else {
+                    None
                 }
+            });
+            match index {
+                Some(idx) => self.native[idx].amount += token.amount,
+                None => self.native.push(token.clone()),
             }
-            Balance::Cw20(token) => {
-                let index = self.cw20.iter().enumerate().find_map(|(i, exist)| {
-                    if exist.address == token.address {
-                        Some(i)
-                    } else {
-                        None
-                    }
-                });
-                match index {
-                    Some(idx) => self.cw20[idx].amount += token.amount,
-                    None => self.cw20.push(token),
-                }
-            }
-        };
+        }
     }
+    
+    pub fn add_cw20tokens(&mut self, token: &Cw20CoinVerified) {
+        let index = self.cw20.iter().enumerate().find_map(|(i, exist)| {
+            if exist.address == token.address {
+                Some(i)
+            } else {
+                None
+            }
+        });
+        match index {
+            Some(idx) => self.cw20[idx].amount += token.amount,
+            None => self.cw20.push(token.clone()),
+        }
+    }
+
     pub fn minus_tokens(&mut self, balance: &Vec<Coin>) {
         for token in balance {
             let index = self.native.iter().enumerate().find_map(|(i, exist)| {
@@ -284,6 +282,7 @@ impl GenericBalance {
             }
         }
     }
+
     pub fn minus_cw20tokens(&mut self, token: &Cw20CoinVerified) {
         let index = self.cw20.iter().enumerate().find_map(|(i, exist)| {
             if exist.address == token.address {
@@ -297,6 +296,7 @@ impl GenericBalance {
         }
     }
 }
+
 fn get_next_block_limited(env: Env, boundary: Boundary) -> (u64, SlotType) {
     let current_block_height = env.block.height;
 
