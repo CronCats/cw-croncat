@@ -336,9 +336,16 @@ impl<'a> CwCroncat<'a> {
         // If we should allow a new agent to take over
         if num_agents_to_accept != 0 {
             // Don't wipe out an older timestamp
-            if c.agent_nomination_begin_time.is_none() {
-                c.agent_nomination_begin_time = Some(env.block.time)
-            }
+            self.agent_nomination_begin_time.update(
+                deps.storage,
+                |begin| -> Result<_, ContractError> {
+                    if begin.is_none() {
+                        Ok(Some(env.block.time))
+                    } else {
+                        Ok(begin)
+                    }
+                },
+            )?;
         }
 
         self.config.save(deps.storage, &c)?;

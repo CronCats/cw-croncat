@@ -52,7 +52,6 @@ impl<'a> CwCroncat<'a> {
             cw20_whitelist: vec![],
             // TODO: ????
             // cw20_fees: vec![],
-            agent_nomination_begin_time: None,
             agent_nomination_duration: msg
                 .agent_nomination_duration
                 .unwrap_or(DEFAULT_NOMINATION_DURATION),
@@ -65,6 +64,7 @@ impl<'a> CwCroncat<'a> {
             .save(deps.storage, &Default::default())?;
         self.task_total.save(deps.storage, &Default::default())?;
         self.reply_index.save(deps.storage, &Default::default())?;
+        self.agent_nomination_begin_time.save(deps.storage, &None)?;
 
         // all instantiated data
         Ok(Response::new()

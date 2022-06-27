@@ -92,21 +92,25 @@ impl<'a> CwCroncat<'a> {
             // If we should allow a new agent to take over
             let num_agents_to_accept =
                 self.agents_to_let_in(&min_tasks_per_agent, &num_active_agents, &total_tasks);
-            if num_agents_to_accept != 0 && c.agent_nomination_begin_time.is_some() {
-                let time_difference = block_time - c.agent_nomination_begin_time.unwrap().seconds();
+            let agent_nomination_begin_time = self.agent_nomination_begin_time.load(storage)?;
+            match agent_nomination_begin_time {
+                Some(begin_time) if num_agents_to_accept > 0 => {
+                    let time_difference = block_time - begin_time.seconds();
 
-                let max_index = cmp::max(
-                    time_difference.div(c.agent_nomination_duration as u64),
-                    num_agents_to_accept - 1,
-                );
-                if agent_position as u64 <= max_index {
-                    AgentStatus::Nominated
-                } else {
+                    let max_index = cmp::max(
+                        time_difference.div(c.agent_nomination_duration as u64),
+                        num_agents_to_accept - 1,
+                    );
+                    if agent_position as u64 <= max_index {
+                        AgentStatus::Nominated
+                    } else {
+                        AgentStatus::Pending
+                    }
+                }
+                _ => {
+                    // Not their time yet
                     AgentStatus::Pending
                 }
-            } else {
-                // Not their time yet
-                AgentStatus::Pending
             }
         } else {
             // This should not happen. It means the address is in self.agents

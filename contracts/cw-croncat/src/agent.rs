@@ -244,16 +244,17 @@ impl<'a> CwCroncat<'a> {
         env: Env,
     ) -> Result<Response, ContractError> {
         // Compare current time and Config's agent_nomination_begin_time to see if agent can join
-        let mut c: Config = self.config.load(deps.storage)?;
+        let c: Config = self.config.load(deps.storage)?;
 
-        let time_difference = if let Some(nomination_start) = c.agent_nomination_begin_time {
-            env.block.time.seconds() - nomination_start.seconds()
-        } else {
-            // No agents can join yet
-            return Err(ContractError::CustomError {
-                val: "Not accepting new agents".to_string(),
-            });
-        };
+        let time_difference =
+            if let Some(nomination_start) = self.agent_nomination_begin_time.load(deps.storage)? {
+                env.block.time.seconds() - nomination_start.seconds()
+            } else {
+                // No agents can join yet
+                return Err(ContractError::CustomError {
+                    val: "Not accepting new agents".to_string(),
+                });
+            };
         // Agent must be in the pending queue
         let pending_queue = self.agent_pending_queue.load(deps.storage)?;
         // Get the position in the pending queue
@@ -285,7 +286,7 @@ impl<'a> CwCroncat<'a> {
 
                 // and update the config, setting the nomination begin time to None,
                 // which indicates no one will be nominated until more tasks arrive
-                c.agent_nomination_begin_time = None;
+                self.agent_nomination_begin_time.save(deps.storage, &None)?;
                 self.config.save(deps.storage, &c)?;
             } else {
                 return Err(ContractError::CustomError {

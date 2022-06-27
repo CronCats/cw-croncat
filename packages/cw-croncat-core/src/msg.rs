@@ -1,6 +1,6 @@
 use crate::types::Agent;
 use crate::types::{Action, Boundary, GenericBalance, Interval, Rule, Task};
-use cosmwasm_std::{Addr, Coin, Timestamp};
+use cosmwasm_std::{Addr, Coin};
 use cw20::Balance;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -121,7 +121,6 @@ pub struct ConfigResponse {
     pub proxy_callback_gas: u32,
     pub slot_granularity: u64,
     pub native_denom: String,
-    pub agent_nomination_begin_time: Option<Timestamp>,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, JsonSchema)]

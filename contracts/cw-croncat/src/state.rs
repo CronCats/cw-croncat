@@ -21,10 +21,6 @@ pub struct Config {
     pub min_tasks_per_agent: u64,
     pub agent_active_index: u64,
     pub agents_eject_threshold: u64,
-    // This is a timestamp that's updated when a new task is added such that
-    // the agent/task ratio allows for another agent to join.
-    // Once an agent joins, fulfilling the need, this value changes to None
-    pub agent_nomination_begin_time: Option<Timestamp>,
     // The duration a prospective agent has to nominate themselves.
     // When a task is created such that a new agent can join,
     // The agent at the zeroth index of the pending agent queue has this time to nominate
@@ -96,6 +92,11 @@ pub struct CwCroncat<'a> {
     /// Keeping ordered sub messages & reply id's
     pub reply_queue: Map<'a, u64, QueueItem>,
     pub reply_index: Item<'a, u64>,
+
+    // This is a timestamp that's updated when a new task is added such that
+    // the agent/task ratio allows for another agent to join.
+    // Once an agent joins, fulfilling the need, this value changes to None
+    pub agent_nomination_begin_time: Item<'a, Option<Timestamp>>,
 }
 
 impl Default for CwCroncat<'static> {
@@ -120,6 +121,7 @@ impl<'a> CwCroncat<'a> {
             block_slots: Map::new("block_slots"),
             reply_queue: Map::new("reply_queue"),
             reply_index: Item::new("reply_index"),
+            agent_nomination_begin_time: Item::new("agent_nomination_begin_time"),
         }
     }
 
