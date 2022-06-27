@@ -68,17 +68,13 @@ impl<'a> CwCroncat<'a> {
         let c: Config = self.config.load(storage)?;
         let block_time = env.block.time.seconds();
         // Check for active
-        let active_opt = self.agent_active_queue.may_load(storage)?;
-        if let Some(active) = active_opt {
-            if active.contains(&account_id) {
-                return Ok(AgentStatus::Active);
-            }
+        let active = self.agent_active_queue.load(storage)?;
+        if active.contains(&account_id) {
+            return Ok(AgentStatus::Active);
         }
+
         // Pending
-        let pending: Vec<Addr> = self
-            .agent_pending_queue
-            .may_load(storage)?
-            .unwrap_or_default();
+        let pending: Vec<Addr> = self.agent_pending_queue.load(storage)?;
         // If agent is pending, Check if they should get nominated to checkin to become active
         let agent_status: AgentStatus = if pending.contains(&account_id) {
             // Load config's task ratio, total tasks, active agents, and agent_nomination_begin_time.
@@ -87,12 +83,7 @@ impl<'a> CwCroncat<'a> {
             let total_tasks = self
                 .task_total(storage)
                 .expect("Unexpected issue getting task total");
-            let num_active_agents = self
-                .agent_active_queue
-                .may_load(storage)
-                .unwrap()
-                .unwrap_or_default()
-                .len() as u64;
+            let num_active_agents = self.agent_active_queue.load(storage).unwrap().len() as u64;
             let agent_position = pending
                 .iter()
                 .position(|address| address == &account_id)
@@ -185,4 +176,26 @@ impl CwTemplateContract {
     //     let res: CountResponse = QuerierWrapper::<CQ>::new(querier).query(&query)?;
     //     Ok(res)
     // }
+}
+
+#[cfg(test)]
+pub mod test_helpers {
+    use cosmwasm_std::{
+        coins,
+        testing::{mock_env, mock_info},
+        DepsMut, Empty, Response, StdResult,
+    };
+    use cw_croncat_core::msg::InstantiateMsg;
+
+    use crate::CwCroncat;
+
+    pub fn mock_init(store: &CwCroncat, deps: DepsMut<Empty>) -> StdResult<Response> {
+        let msg = InstantiateMsg {
+            denom: "atom".to_string(),
+            owner_id: None,
+            agent_nomination_duration: Some(360),
+        };
+        let info = mock_info("creator", &coins(1000, "meow"));
+        store.instantiate(deps, mock_env(), info.clone(), msg)
+    }
 }

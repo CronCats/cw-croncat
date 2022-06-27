@@ -18,11 +18,7 @@ impl<'a> CwCroncat<'a> {
     ) -> StdResult<Vec<TaskResponse>> {
         let mut ret: Vec<TaskResponse> = Vec::new();
         let mut start = 0;
-        let size: u64 = self
-            .task_total
-            .may_load(deps.storage)?
-            .unwrap_or(100)
-            .min(1000);
+        let size: u64 = self.task_total.load(deps.storage)?.min(1000);
         if let Some(index) = from_index {
             start = index;
         }
@@ -334,11 +330,7 @@ impl<'a> CwCroncat<'a> {
 
         // If the creation of this task means we'd like another agent, update config
         let min_tasks_per_agent = c.min_tasks_per_agent;
-        let num_active_agents = self
-            .agent_active_queue
-            .may_load(deps.storage)?
-            .unwrap_or_default()
-            .len() as u64;
+        let num_active_agents = self.agent_active_queue.load(deps.storage)?.len() as u64;
         let num_agents_to_accept =
             self.agents_to_let_in(&min_tasks_per_agent, &num_active_agents, &size);
         // If we should allow a new agent to take over
