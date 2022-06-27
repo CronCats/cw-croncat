@@ -448,20 +448,31 @@ impl Interval {
 
 #[cfg(test)]
 mod tests {
-    use hex::ToHex;
-
     use super::*;
+
+    use hex::ToHex;
 
     #[test]
     fn hashing() {
         let task = Task {
             owner_id: Addr::unchecked("bob"),
             interval: Interval::Block(5),
-            boundary: Boundary { start: Some(BoundarySpec::Height(4)), end: None },
+            boundary: Boundary {
+                start: Some(BoundarySpec::Height(4)),
+                end: None,
+            },
             stop_on_fail: false,
             total_deposit: Default::default(),
-            actions: vec![Action{ msg:CosmosMsg::Wasm(WasmMsg::ClearAdmin{ contract_addr: "alice".to_string() }), gas_limit: Some(5) }],
-            rules: Some(vec![Rule{ contract_addr: Addr::unchecked("foo"), msg: Binary("bar".into()) }]),
+            actions: vec![Action {
+                msg: CosmosMsg::Wasm(WasmMsg::ClearAdmin {
+                    contract_addr: "alice".to_string(),
+                }),
+                gas_limit: Some(5),
+            }],
+            rules: Some(vec![Rule {
+                contract_addr: Addr::unchecked("foo"),
+                msg: Binary("bar".into()),
+            }]),
         };
 
         let message = format!(
