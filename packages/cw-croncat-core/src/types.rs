@@ -159,11 +159,7 @@ impl Task {
     pub fn to_hash(&self) -> String {
         let message = format!(
             "{:?}{:?}{:?}{:?}{:?}",
-            self.owner_id,
-            self.interval,
-            self.clone().boundary,
-            self.actions,
-            self.rules
+            self.owner_id, self.interval, self.boundary, self.actions, self.rules
         );
 
         let hash = Sha256::digest(message.as_bytes());
@@ -447,5 +443,39 @@ impl Interval {
                 s.is_ok()
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use hex::ToHex;
+
+    use super::*;
+
+    #[test]
+    fn hashing() {
+        let task = Task {
+            owner_id: Addr::unchecked("bob"),
+            interval: Interval::Block(5),
+            boundary: Boundary { start: Some(BoundarySpec::Height(4)), end: None },
+            stop_on_fail: false,
+            total_deposit: Default::default(),
+            actions: vec![Action{ msg:CosmosMsg::Wasm(WasmMsg::ClearAdmin{ contract_addr: "alice".to_string() }), gas_limit: Some(5) }],
+            rules: Some(vec![Rule{ contract_addr: Addr::unchecked("foo"), msg: Binary("bar".into()) }]),
+        };
+
+        let message = format!(
+            "{:?}{:?}{:?}{:?}{:?}",
+            task.owner_id, task.interval, task.boundary, task.actions, task.rules
+        );
+
+        let hash = Sha256::digest(message.as_bytes());
+
+        let encoded: String = hash.encode_hex();
+        let bytes = encoded.as_bytes();
+
+        // Tests
+        assert_eq!(encoded, task.to_hash());
+        assert_eq!(bytes, task.to_hash_vec());
     }
 }
