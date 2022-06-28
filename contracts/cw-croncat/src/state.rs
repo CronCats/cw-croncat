@@ -130,14 +130,20 @@ impl<'a> CwCroncat<'a> {
     }
 
     pub fn increment_tasks(&self, storage: &mut dyn Storage) -> StdResult<u64> {
-        let val = self.task_total(storage)? + 1;
-        self.task_total.save(storage, &val)?;
+        let val = self
+            .task_total
+            .update(storage, |total_tasks| -> StdResult<u64> {
+                Ok(total_tasks + 1)
+            })?;
         Ok(val)
     }
 
     pub fn decrement_tasks(&self, storage: &mut dyn Storage) -> StdResult<u64> {
-        let val = self.task_total(storage)? - 1;
-        self.task_total.save(storage, &val)?;
+        let val = self
+            .task_total
+            .update(storage, |total_tasks| -> StdResult<u64> {
+                Ok(total_tasks - 1)
+            })?;
         Ok(val)
     }
 

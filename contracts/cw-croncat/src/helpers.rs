@@ -64,8 +64,8 @@ impl<'a> CwCroncat<'a> {
         storage: &dyn Storage,
         env: Env,
         account_id: Addr,
-        active: &[Addr],
     ) -> Result<AgentStatus, ContractError> {
+        let active: Vec<Addr> = self.agent_active_queue.load(storage)?;
         // Check for active
         if active.contains(&account_id) {
             return Ok(AgentStatus::Active);
