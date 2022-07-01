@@ -2,11 +2,11 @@ use crate::error::ContractError;
 use crate::helpers::has_cw_coins;
 use crate::state::{Config, CwCroncat};
 use cosmwasm_std::{
-    has_coins, to_binary, Addr, BankMsg, Coin, Deps, DepsMut, Env, MessageInfo, Response,
-    StdResult, SubMsg, WasmMsg,
+    has_coins, to_binary, Addr, BankMsg, Deps, DepsMut, Env, MessageInfo, Response, StdResult,
+    SubMsg, WasmMsg,
 };
 use cw20::{Balance, Cw20ExecuteMsg};
-use cw_croncat_core::msg::{BalancesResponse, ConfigResponse, ExecuteMsg};
+use cw_croncat_core::msg::{BalancesResponse, ConfigResponse, UpdateSettings};
 
 impl<'a> CwCroncat<'a> {
     pub(crate) fn query_config(&self, deps: Deps) -> StdResult<ConfigResponse> {
@@ -23,7 +23,6 @@ impl<'a> CwCroncat<'a> {
             gas_price: c.gas_price,
             proxy_callback_gas: c.proxy_callback_gas,
             slot_granularity: c.slot_granularity,
-            agent_nomination_begin_time: c.agent_nomination_begin_time,
         })
     }
 
@@ -43,61 +42,42 @@ impl<'a> CwCroncat<'a> {
         &self,
         deps: DepsMut,
         info: MessageInfo,
-        payload: ExecuteMsg,
+        payload: UpdateSettings,
     ) -> Result<Response, ContractError> {
         // TODO: Panic on attach funds
-        match payload {
-            ExecuteMsg::UpdateSettings {
-                owner_id,
-                slot_granularity,
-                paused,
-                agent_fee,
-                gas_price,
-                proxy_callback_gas,
-                min_tasks_per_agent,
-                agents_eject_threshold,
-                // treasury_id,
-            } => {
-                self.config
-                    .update(deps.storage, |mut config| -> Result<_, ContractError> {
-                        if info.sender != config.owner_id {
-                            return Err(ContractError::Unauthorized {});
-                        }
+        let UpdateSettings {
+            owner_id,
+            slot_granularity,
+            paused,
+            agent_fee,
+            gas_price,
+            proxy_callback_gas,
+            min_tasks_per_agent,
+            agents_eject_threshold,
+            // treasury_id,
+        } = payload;
+        let c: Config = self
+            .config
+            .update(deps.storage, |config| -> Result<_, ContractError> {
+                if info.sender != config.owner_id {
+                    return Err(ContractError::Unauthorized {});
+                }
+                let new_config: Config = Config {
+                    paused: paused.unwrap_or(config.paused),
+                    owner_id: owner_id.unwrap_or(config.owner_id),
+                    min_tasks_per_agent: min_tasks_per_agent.unwrap_or(config.min_tasks_per_agent),
+                    agents_eject_threshold: agents_eject_threshold
+                        .unwrap_or(config.min_tasks_per_agent),
+                    agent_fee: agent_fee.unwrap_or(config.agent_fee),
+                    gas_price: gas_price.unwrap_or(config.gas_price),
+                    proxy_callback_gas: proxy_callback_gas.unwrap_or(config.proxy_callback_gas),
+                    slot_granularity: slot_granularity.unwrap_or(config.slot_granularity),
+                    // treasury_id
+                    ..config
+                };
+                Ok(new_config)
+            })?;
 
-                        if let Some(owner_id) = owner_id {
-                            config.owner_id = owner_id;
-                        }
-                        // if let Some(treasury_id) = treasury_id {
-                        //     config.treasury_id = Some(treasury_id);
-                        // }
-
-                        if let Some(slot_granularity) = slot_granularity {
-                            config.slot_granularity = slot_granularity;
-                        }
-                        if let Some(paused) = paused {
-                            config.paused = paused;
-                        }
-                        if let Some(gas_price) = gas_price {
-                            config.gas_price = gas_price;
-                        }
-                        if let Some(proxy_callback_gas) = proxy_callback_gas {
-                            config.proxy_callback_gas = proxy_callback_gas;
-                        }
-                        if let Some(agent_fee) = agent_fee {
-                            config.agent_fee = agent_fee;
-                        }
-                        if let Some(min_tasks_per_agent) = min_tasks_per_agent {
-                            config.min_tasks_per_agent = min_tasks_per_agent;
-                        }
-                        if let Some(agents_eject_threshold) = agents_eject_threshold {
-                            config.agents_eject_threshold = agents_eject_threshold;
-                        }
-                        Ok(config)
-                    })?;
-            }
-            _ => unreachable!(),
-        }
-        let c: Config = self.config.load(deps.storage)?;
         Ok(Response::new()
             .add_attribute("method", "update_settings")
             .add_attribute("paused", c.paused.to_string())
@@ -159,29 +139,20 @@ impl<'a> CwCroncat<'a> {
         // Querier guarantees to returns up-to-date data, including funds sent in this handle message
         // https://github.com/CosmWasm/wasmd/blob/master/x/wasm/internal/keeper/keeper.go#L185-L192
         let state_balances = deps.querier.query_all_balances(&env.contract.address)?;
-        let mut has_fund_err = false;
 
-        let messages: Result<Vec<SubMsg>, ContractError> = balances
+        let messages: Vec<SubMsg> = balances
             .iter()
             .map(|balance| -> Result<SubMsg<_>, ContractError> {
                 match balance {
                     Balance::Native(balance) => {
                         // check has enough
                         let bal = balance.clone().into_vec();
-                        let has_c = has_coins(&state_balances, &bal[0]);
-                        if !has_c {
-                            has_fund_err = true;
-                            // TODO: refactor to not need
-                            return Ok(SubMsg::new(BankMsg::Send {
-                                to_address: account_id.clone().into(),
-                                amount: vec![Coin::new(0, "")],
-                            }));
+                        if !has_coins(&state_balances, &bal[0]) {
+                            return Err(ContractError::NotEnoughFunds {});
                         }
 
                         // Update internal registry balance
-                        config
-                            .available_balance
-                            .minus_tokens(Balance::from(bal.clone()));
+                        config.available_balance.minus_tokens(&bal);
                         Ok(SubMsg::new(BankMsg::Send {
                             to_address: account_id.clone().into(),
                             amount: bal,
@@ -191,18 +162,11 @@ impl<'a> CwCroncat<'a> {
                         // check has enough
                         let bal = token.clone();
                         if !has_cw_coins(&config.available_balance.cw20, &bal) {
-                            has_fund_err = true;
-                            // TODO: refactor to not need
-                            return Ok(SubMsg::new(BankMsg::Send {
-                                to_address: account_id.clone().into(),
-                                amount: vec![Coin::new(0, "")],
-                            }));
+                            return Err(ContractError::NotEnoughFunds {});
                         }
 
                         // Update internal registry balance
-                        config
-                            .available_balance
-                            .minus_tokens(Balance::from(bal.clone()));
+                        config.available_balance.minus_cw20tokens(&bal);
 
                         let msg = Cw20ExecuteMsg::Transfer {
                             recipient: account_id.clone().into(),
@@ -216,22 +180,14 @@ impl<'a> CwCroncat<'a> {
                     }
                 }
             })
-            .collect();
-
-        // failed
-        if has_fund_err {
-            return Err(ContractError::CustomError {
-                val: "Not enough funds".to_string(),
-            });
-        }
-
+            .collect::<Result<Vec<SubMsg>, ContractError>>()?;
         // Update balances in config
         self.config.save(deps.storage, &config)?;
 
         Ok(Response::new()
             .add_attribute("method", "move_balance")
             .add_attribute("account_id", account_id.to_string())
-            .add_submessages(messages.unwrap()))
+            .add_submessages(messages))
     }
 }
 
@@ -243,7 +199,7 @@ mod tests {
     use cosmwasm_std::{coin, coins, from_binary, Addr};
     use cw20::Balance;
     use cw_croncat_core::msg::{
-        BalancesResponse, ConfigResponse, ExecuteMsg, InstantiateMsg, QueryMsg,
+        BalancesResponse, ConfigResponse, ExecuteMsg, InstantiateMsg, QueryMsg, UpdateSettings,
     };
 
     #[test]
@@ -263,15 +219,17 @@ mod tests {
         assert_eq!(0, res_init.messages.len());
 
         let payload = ExecuteMsg::UpdateSettings {
-            paused: Some(true),
-            owner_id: None,
-            // treasury_id: None,
-            agent_fee: None,
-            min_tasks_per_agent: None,
-            agents_eject_threshold: None,
-            gas_price: None,
-            proxy_callback_gas: None,
-            slot_granularity: None,
+            update_settings: UpdateSettings {
+                paused: Some(true),
+                owner_id: None,
+                // treasury_id: None,
+                agent_fee: None,
+                min_tasks_per_agent: None,
+                agents_eject_threshold: None,
+                gas_price: None,
+                proxy_callback_gas: None,
+                slot_granularity: None,
+            },
         };
 
         // non-owner fails
@@ -318,15 +276,17 @@ mod tests {
         assert!(res_init.messages.is_empty());
 
         let payload = ExecuteMsg::UpdateSettings {
-            paused: None,
-            owner_id: None,
-            // treasury_id: Some(Addr::unchecked("money_bags")),
-            agent_fee: None,
-            min_tasks_per_agent: None,
-            agents_eject_threshold: None,
-            gas_price: None,
-            proxy_callback_gas: None,
-            slot_granularity: None,
+            update_settings: UpdateSettings {
+                paused: None,
+                owner_id: None,
+                // treasury_id: Some(Addr::unchecked("money_bags")),
+                agent_fee: None,
+                min_tasks_per_agent: None,
+                agents_eject_threshold: None,
+                gas_price: None,
+                proxy_callback_gas: None,
+                slot_granularity: None,
+            },
         };
         let res_exec = store
             .execute(deps.as_mut(), mock_env(), info.clone(), payload)
@@ -377,15 +337,17 @@ mod tests {
         assert!(res_init.messages.is_empty());
 
         let payload = ExecuteMsg::UpdateSettings {
-            paused: None,
-            owner_id: None,
-            // treasury_id: Some(money_bags.clone()),
-            agent_fee: None,
-            min_tasks_per_agent: None,
-            agents_eject_threshold: None,
-            gas_price: None,
-            proxy_callback_gas: None,
-            slot_granularity: None,
+            update_settings: UpdateSettings {
+                paused: None,
+                owner_id: None,
+                // treasury_id: Some(money_bags.clone()),
+                agent_fee: None,
+                min_tasks_per_agent: None,
+                agents_eject_threshold: None,
+                gas_price: None,
+                proxy_callback_gas: None,
+                slot_granularity: None,
+            },
         };
         let res_exec = store
             .execute(deps.as_mut(), mock_env(), info.clone(), payload)
@@ -399,7 +361,7 @@ mod tests {
         };
         let res_fail = store.execute(deps.as_mut(), mock_env(), info.clone(), msg_move_fail);
         match res_fail {
-            Err(ContractError::CustomError { .. }) => {}
+            Err(ContractError::NotEnoughFunds {}) => {}
             _ => panic!("Must return custom not enough funds error"),
         }
 

@@ -4,7 +4,6 @@ use crate::state::{Config, CwCroncat};
 use cosmwasm_std::{
     coin, Addr, BankMsg, Coin, Deps, DepsMut, Env, MessageInfo, Order, Response, StdResult, SubMsg,
 };
-use cw20::Balance;
 use cw_croncat_core::msg::{TaskRequest, TaskResponse};
 use cw_croncat_core::types::{SlotType, Task};
 
@@ -19,11 +18,7 @@ impl<'a> CwCroncat<'a> {
     ) -> StdResult<Vec<TaskResponse>> {
         let mut ret: Vec<TaskResponse> = Vec::new();
         let mut start = 0;
-        let size: u64 = self
-            .task_total
-            .may_load(deps.storage)?
-            .unwrap_or(100)
-            .min(1000);
+        let size: u64 = self.task_total.load(deps.storage)?.min(1000);
         if let Some(index) = from_index {
             start = index;
         }
@@ -295,12 +290,13 @@ impl<'a> CwCroncat<'a> {
 
         // Increment task totals
         let size_res = self.increment_tasks(deps.storage);
-        if size_res.is_err() {
+        let size = if let Ok(size) = size_res {
+            size
+        } else {
             return Err(ContractError::CustomError {
                 val: "Problem incrementing task total".to_string(),
             });
-        }
-        let size = size_res.unwrap();
+        };
 
         // Get previous task hashes in slot, add as needed
         let update_vec_data = |d: Option<Vec<Vec<u8>>>| -> StdResult<Vec<Vec<u8>>> {
@@ -330,23 +326,26 @@ impl<'a> CwCroncat<'a> {
 
         // Add the attached balance into available_balance
         let mut c: Config = self.config.load(deps.storage)?;
-        c.available_balance.add_tokens(Balance::from(info.funds));
+        c.available_balance.add_tokens(&info.funds);
 
         // If the creation of this task means we'd like another agent, update config
         let min_tasks_per_agent = c.min_tasks_per_agent;
-        let num_active_agents = self
-            .agent_active_queue
-            .may_load(deps.storage)?
-            .unwrap_or_default()
-            .len() as u64;
+        let num_active_agents = self.agent_active_queue.load(deps.storage)?.len() as u64;
         let num_agents_to_accept =
             self.agents_to_let_in(&min_tasks_per_agent, &num_active_agents, &size);
         // If we should allow a new agent to take over
         if num_agents_to_accept != 0 {
             // Don't wipe out an older timestamp
-            if c.agent_nomination_begin_time.is_none() {
-                c.agent_nomination_begin_time = Some(env.block.time)
-            }
+            self.agent_nomination_begin_time.update(
+                deps.storage,
+                |begin| -> Result<_, ContractError> {
+                    if begin.is_none() {
+                        Ok(Some(env.block.time))
+                    } else {
+                        Ok(begin)
+                    }
+                },
+            )?;
         }
 
         self.config.save(deps.storage, &c)?;
@@ -362,11 +361,13 @@ impl<'a> CwCroncat<'a> {
     pub fn remove_task(&self, deps: DepsMut, task_hash: String) -> Result<Response, ContractError> {
         let hash_vec = task_hash.clone().into_bytes();
         let task_raw = self.tasks.may_load(deps.storage, hash_vec.clone())?;
-        if task_raw.is_none() {
+        let task = if let Some(task) = task_raw {
+            task
+        } else {
             return Err(ContractError::CustomError {
                 val: "No task found by hash".to_string(),
             });
-        }
+        };
 
         // Remove all the thangs
         self.tasks.remove(deps.storage, hash_vec)?;
@@ -419,7 +420,7 @@ impl<'a> CwCroncat<'a> {
         }
 
         // setup sub-msgs for returning any remaining total_deposit to the owner
-        let task = task_raw.unwrap();
+        let task = task;
         let submsgs = SubMsg::new(BankMsg::Send {
             to_address: task.clone().owner_id.into(),
             amount: task.clone().total_deposit,
@@ -427,8 +428,7 @@ impl<'a> CwCroncat<'a> {
 
         // remove from the total available_balance
         let mut c: Config = self.config.load(deps.storage)?;
-        c.available_balance
-            .minus_tokens(Balance::from(task.total_deposit));
+        c.available_balance.minus_tokens(&task.total_deposit);
         self.config.save(deps.storage, &c)?;
 
         Ok(Response::new()
@@ -446,12 +446,13 @@ impl<'a> CwCroncat<'a> {
     ) -> Result<Response, ContractError> {
         let hash_vec = task_hash.into_bytes();
         let task_raw = self.tasks.may_load(deps.storage, hash_vec.clone())?;
-        if task_raw.is_none() {
+        let mut task = if let Some(task) = task_raw {
+            task
+        } else {
             return Err(ContractError::CustomError {
                 val: "Task doesnt exist".to_string(),
             });
-        }
-        let mut task: Task = task_raw.unwrap();
+        };
         if task.owner_id != info.sender {
             return Err(ContractError::CustomError {
                 val: "Only owner can refill their task".to_string(),
@@ -459,14 +460,15 @@ impl<'a> CwCroncat<'a> {
         }
 
         // Add the attached balance into available_balance
-        let mut c: Config = self.config.load(deps.storage)?;
-        c.available_balance
-            .add_tokens(Balance::from(info.funds.clone()));
-        self.config.save(deps.storage, &c)?;
+        self.config
+            .update(deps.storage, |mut config| -> Result<_, ContractError> {
+                config.available_balance.add_tokens(&info.funds.clone());
+                Ok(config)
+            })?;
 
         let mut total_balance: Vec<Coin> = vec![];
         for t in task.total_deposit.iter() {
-            for f in info.funds.clone() {
+            for f in &info.funds {
                 if f.denom == t.denom {
                     let amt = t.clone().amount.saturating_add(f.amount);
                     total_balance.push(coin(amt.into(), t.clone().denom));
@@ -503,7 +505,9 @@ mod tests {
     use cw_multi_test::{App, AppBuilder, Contract, ContractWrapper, Executor};
     // use crate::error::ContractError;
     use crate::helpers::CwTemplateContract;
-    use cw_croncat_core::msg::{BalancesResponse, ExecuteMsg, InstantiateMsg, QueryMsg};
+    use cw_croncat_core::msg::{
+        BalancesResponse, ExecuteMsg, InstantiateMsg, QueryMsg, UpdateSettings,
+    };
     use cw_croncat_core::types::{Action, Boundary, BoundarySpec};
 
     pub fn contract_template() -> Box<dyn Contract<Empty>> {
@@ -728,15 +732,17 @@ mod tests {
 
         // Create task paused
         let change_settings_msg = ExecuteMsg::UpdateSettings {
-            paused: Some(true),
-            owner_id: None,
-            // treasury_id: None,
-            agent_fee: None,
-            agents_eject_threshold: None,
-            gas_price: None,
-            proxy_callback_gas: None,
-            slot_granularity: None,
-            min_tasks_per_agent: None,
+            update_settings: UpdateSettings {
+                paused: Some(true),
+                owner_id: None,
+                // treasury_id: None,
+                agent_fee: None,
+                agents_eject_threshold: None,
+                gas_price: None,
+                proxy_callback_gas: None,
+                slot_granularity: None,
+                min_tasks_per_agent: None,
+            },
         };
         app.execute_contract(
             Addr::unchecked(ADMIN),
@@ -764,15 +770,17 @@ mod tests {
             Addr::unchecked(ADMIN),
             contract_addr.clone(),
             &ExecuteMsg::UpdateSettings {
-                paused: Some(false),
-                owner_id: None,
-                // treasury_id: None,
-                agent_fee: None,
-                agents_eject_threshold: None,
-                gas_price: None,
-                proxy_callback_gas: None,
-                slot_granularity: None,
-                min_tasks_per_agent: None,
+                update_settings: UpdateSettings {
+                    paused: Some(false),
+                    owner_id: None,
+                    // treasury_id: None,
+                    agent_fee: None,
+                    agents_eject_threshold: None,
+                    gas_price: None,
+                    proxy_callback_gas: None,
+                    slot_granularity: None,
+                    min_tasks_per_agent: None,
+                },
             },
             &vec![],
         )

@@ -5,7 +5,6 @@ use cosmwasm_std::{
     has_coins, Addr, Coin, Deps, DepsMut, Env, MessageInfo, Response, StdError, StdResult, Storage,
     SubMsg,
 };
-use cw20::Balance;
 use std::ops::Div;
 
 use cw_croncat_core::msg::{GetAgentIdsResponse, GetAgentTasksResponse};
@@ -20,52 +19,36 @@ impl<'a> CwCroncat<'a> {
         env: Env,
         account_id: Addr,
     ) -> StdResult<Option<AgentResponse>> {
-        let agent = self.agents.may_load(deps.storage, account_id.clone())?;
-        if agent.is_none() {
+        let agent = if let Some(a) = self.agents.may_load(deps.storage, account_id.clone())? {
+            a
+        } else {
             return Ok(None);
-        }
-        let active: Vec<Addr> = self
-            .agent_active_queue
-            .may_load(deps.storage)?
-            .unwrap_or_default();
-        let a = agent.unwrap();
-        let mut agent_response = AgentResponse {
-            status: AgentStatus::Pending, // Simple default
-            payable_account_id: a.payable_account_id,
-            balance: a.balance,
-            total_tasks_executed: a.total_tasks_executed,
-            last_missed_slot: a.last_missed_slot,
-            register_start: a.register_start,
         };
-
-        if active.contains(&account_id) {
-            agent_response.status = AgentStatus::Active;
-            return Ok(Some(agent_response));
-        }
-
         let agent_status = self.get_agent_status(deps.storage, env, account_id);
 
         // Return wrapped error if there was a problem
-        if agent_status.is_err() {
-            return Err(StdError::GenericErr {
-                msg: agent_status.err().unwrap().to_string(),
-            });
+        match agent_status {
+            Err(error) => Err(StdError::GenericErr {
+                msg: error.to_string(),
+            }),
+            Ok(status) => {
+                let agent_response = AgentResponse {
+                    status,
+                    payable_account_id: agent.payable_account_id,
+                    balance: agent.balance,
+                    total_tasks_executed: agent.total_tasks_executed,
+                    last_missed_slot: agent.last_missed_slot,
+                    register_start: agent.register_start,
+                };
+                Ok(Some(agent_response))
+            }
         }
-
-        agent_response.status = agent_status.expect("Should have valid agent status");
-        Ok(Some(agent_response))
     }
 
     /// Get a list of agent addresses
     pub(crate) fn query_get_agent_ids(&self, deps: Deps) -> StdResult<GetAgentIdsResponse> {
-        let active: Vec<Addr> = self
-            .agent_active_queue
-            .may_load(deps.storage)?
-            .unwrap_or_default();
-        let pending: Vec<Addr> = self
-            .agent_pending_queue
-            .may_load(deps.storage)?
-            .unwrap_or_default();
+        let active: Vec<Addr> = self.agent_active_queue.load(deps.storage)?;
+        let pending: Vec<Addr> = self.agent_pending_queue.load(deps.storage)?;
 
         Ok(GetAgentIdsResponse { active, pending })
     }
@@ -128,27 +111,19 @@ impl<'a> CwCroncat<'a> {
             &Coin::new(u128::from(unit_cost), c.native_denom),
         ) || agent_wallet_balances.is_empty()
         {
-            return Err(ContractError::CustomError {
-                val: "Insufficient funds".to_string(),
-            });
+            return Err(ContractError::NotEnoughFunds {});
         }
 
         let payable_id = payable_account_id.unwrap_or_else(|| account.clone());
 
-        let mut active_agents: Vec<Addr> = self
-            .agent_active_queue
-            .may_load(deps.storage)?
-            .unwrap_or_default();
+        let mut active_agents: Vec<Addr> = self.agent_active_queue.load(deps.storage)?;
         let total_agents = active_agents.len();
         let agent_status = if total_agents == 0 {
             active_agents.push(account.clone());
             self.agent_active_queue.save(deps.storage, &active_agents)?;
             AgentStatus::Active
         } else {
-            let mut pending_agents = self
-                .agent_pending_queue
-                .may_load(deps.storage)?
-                .unwrap_or_default();
+            let mut pending_agents = self.agent_pending_queue.load(deps.storage)?;
             pending_agents.push(account.clone());
             self.agent_pending_queue
                 .save(deps.storage, &pending_agents)?;
@@ -195,7 +170,7 @@ impl<'a> CwCroncat<'a> {
         let c: Config = self.config.load(deps.storage)?;
         if c.paused {
             return Err(ContractError::ContractPaused {
-                val: "Register agent paused".to_string(),
+                val: "Update agent paused".to_string(),
             });
         }
 
@@ -204,10 +179,9 @@ impl<'a> CwCroncat<'a> {
             info.sender,
             |a: Option<Agent>| -> Result<_, ContractError> {
                 match a {
-                    Some(agent) => {
-                        let mut ag = agent;
-                        ag.payable_account_id = payable_account_id;
-                        Ok(ag)
+                    Some(mut agent) => {
+                        agent.payable_account_id = payable_account_id;
+                        Ok(agent)
                     }
                     None => Err(ContractError::AgentUnregistered {}),
                 }
@@ -224,22 +198,23 @@ impl<'a> CwCroncat<'a> {
         info: MessageInfo,
     ) -> Result<Vec<SubMsg>, ContractError> {
         let a = self.agents.may_load(storage, info.sender)?;
-        if a.is_none() {
+        let agent = if let Some(agent) = a {
+            agent
+        } else {
             return Err(ContractError::AgentUnregistered {});
-        }
-        let agent = a.unwrap();
+        };
 
         // This will send all token balances to Agent
         let (messages, balances) = send_tokens(&agent.payable_account_id, &agent.balance)?;
-        let mut config = self.config.load(storage)?;
-        config
-            .available_balance
-            .minus_tokens(Balance::from(balances.native));
-        // TODO: Finish:
-        // config
-        //     .available_balance
-        //     .minus_tokens(Balance::from(balances.cw20));
-        self.config.save(storage, &config)?;
+        self.config
+            .update(storage, |mut config| -> Result<_, ContractError> {
+                config.available_balance.minus_tokens(&balances.native);
+                // TODO: Finish:
+                // config
+                //     .available_balance
+                //     .minus_tokens(Balance::from(balances.cw20))
+                Ok(config)
+            })?;
 
         Ok(messages)
     }
@@ -267,21 +242,19 @@ impl<'a> CwCroncat<'a> {
         env: Env,
     ) -> Result<Response, ContractError> {
         // Compare current time and Config's agent_nomination_begin_time to see if agent can join
-        let mut c: Config = self.config.load(deps.storage)?;
+        let c: Config = self.config.load(deps.storage)?;
 
-        let time_difference = if let Some(nomination_start) = c.agent_nomination_begin_time {
-            env.block.time.seconds() - nomination_start.seconds()
-        } else {
-            // No agents can join yet
-            return Err(ContractError::CustomError {
-                val: "Not accepting new agents".to_string(),
-            });
-        };
+        let time_difference =
+            if let Some(nomination_start) = self.agent_nomination_begin_time.load(deps.storage)? {
+                env.block.time.seconds() - nomination_start.seconds()
+            } else {
+                // No agents can join yet
+                return Err(ContractError::CustomError {
+                    val: "Not accepting new agents".to_string(),
+                });
+            };
         // Agent must be in the pending queue
-        let pending_queue = self
-            .agent_pending_queue
-            .may_load(deps.storage)?
-            .unwrap_or_default();
+        let pending_queue = self.agent_pending_queue.load(deps.storage)?;
         // Get the position in the pending queue
         if let Some(agent_position) = pending_queue
             .iter()
@@ -296,10 +269,7 @@ impl<'a> CwCroncat<'a> {
             if agent_position as u64 <= max_index {
                 // Make this agent active
                 // Update state removing from pending queue
-                let mut pending_agents: Vec<Addr> = self
-                    .agent_pending_queue
-                    .may_load(deps.storage)?
-                    .unwrap_or_default();
+                let mut pending_agents: Vec<Addr> = self.agent_pending_queue.load(deps.storage)?;
                 // Remove this agent and all ahead of them in the queue (they missed out)
                 for idx_to_remove in (0..=agent_position).rev() {
                     pending_agents.remove(idx_to_remove);
@@ -308,16 +278,13 @@ impl<'a> CwCroncat<'a> {
                     .save(deps.storage, &pending_agents)?;
 
                 // and adding to active queue
-                let mut active_agents: Vec<Addr> = self
-                    .agent_active_queue
-                    .may_load(deps.storage)?
-                    .unwrap_or_default();
+                let mut active_agents: Vec<Addr> = self.agent_active_queue.load(deps.storage)?;
                 active_agents.push(info.sender.clone());
                 self.agent_active_queue.save(deps.storage, &active_agents)?;
 
                 // and update the config, setting the nomination begin time to None,
                 // which indicates no one will be nominated until more tasks arrive
-                c.agent_nomination_begin_time = None;
+                self.agent_nomination_begin_time.save(deps.storage, &None)?;
                 self.config.save(deps.storage, &c)?;
             } else {
                 return Err(ContractError::CustomError {
@@ -350,11 +317,7 @@ impl<'a> CwCroncat<'a> {
             .add_attribute("method", "unregister_agent")
             .add_attribute("account_id", agent_id);
 
-        if messages.is_empty() {
-            Ok(responses)
-        } else {
-            Ok(responses.add_submessages(messages))
-        }
+        Ok(responses.add_submessages(messages))
     }
 }
 
@@ -365,7 +328,9 @@ mod tests {
     use crate::helpers::CwTemplateContract;
     use cosmwasm_std::testing::{mock_env, mock_info, MOCK_CONTRACT_ADDR};
     use cosmwasm_std::{coin, coins, from_slice, Addr, BlockInfo, CosmosMsg, Empty, StakingMsg};
-    use cw_croncat_core::msg::{ExecuteMsg, InstantiateMsg, QueryMsg, TaskRequest, TaskResponse};
+    use cw_croncat_core::msg::{
+        ExecuteMsg, InstantiateMsg, QueryMsg, TaskRequest, TaskResponse, UpdateSettings,
+    };
     use cw_croncat_core::types::{Action, Boundary, Interval};
     use cw_multi_test::{App, AppBuilder, AppResponse, Contract, ContractWrapper, Executor};
 
@@ -628,15 +593,17 @@ mod tests {
 
         // Test Can't register if contract is paused
         let payload_1 = ExecuteMsg::UpdateSettings {
-            paused: Some(true),
-            owner_id: None,
-            // treasury_id: None,
-            agent_fee: None,
-            min_tasks_per_agent: None,
-            agents_eject_threshold: None,
-            gas_price: None,
-            proxy_callback_gas: None,
-            slot_granularity: None,
+            update_settings: UpdateSettings {
+                paused: Some(true),
+                owner_id: None,
+                // treasury_id: None,
+                agent_fee: None,
+                min_tasks_per_agent: None,
+                agents_eject_threshold: None,
+                gas_price: None,
+                proxy_callback_gas: None,
+                slot_granularity: None,
+            },
         };
 
         app.execute_contract(
@@ -658,15 +625,17 @@ mod tests {
 
         // Test wallet rejected if doesnt have enough funds
         let payload_2 = ExecuteMsg::UpdateSettings {
-            paused: Some(false),
-            owner_id: None,
-            // treasury_id: None,
-            agent_fee: None,
-            min_tasks_per_agent: None,
-            agents_eject_threshold: None,
-            gas_price: None,
-            proxy_callback_gas: None,
-            slot_granularity: None,
+            update_settings: UpdateSettings {
+                paused: Some(false),
+                owner_id: None,
+                // treasury_id: None,
+                agent_fee: None,
+                min_tasks_per_agent: None,
+                agents_eject_threshold: None,
+                gas_price: None,
+                proxy_callback_gas: None,
+                slot_granularity: None,
+            },
         };
 
         app.execute_contract(
@@ -680,9 +649,7 @@ mod tests {
             .execute_contract(Addr::unchecked(AGENT0), contract_addr.clone(), &msg, &[])
             .unwrap_err();
         assert_eq!(
-            ContractError::CustomError {
-                val: "Insufficient funds".to_string()
-            },
+            ContractError::NotEnoughFunds {},
             rereg_err.downcast().unwrap()
         );
     }
@@ -1065,21 +1032,21 @@ mod tests {
             .unwrap();
         assert_eq!(0, res_init.messages.len());
 
+        let agent_active_queue_opt: Vec<Addr> =
+            match deps.storage.get("agent_active_queue".as_bytes()) {
+                Some(vec) => from_slice(vec.as_ref()).expect("Could not load agent active queue"),
+                None => {
+                    panic!("Uninitialized agent_active_queue_opt");
+                }
+            };
+        assert!(
+            agent_active_queue_opt.is_empty(),
+            "Should not have an active queue yet"
+        );
+
         let mut agent_status_res =
             contract.get_agent_status(&deps.storage, mock_env(), Addr::unchecked(AGENT0));
         assert_eq!(Err(ContractError::AgentUnregistered {}), agent_status_res);
-
-        let agent_active_queue_opt: Option<Vec<Addr>> = match deps
-            .storage
-            .get("agent_active_queue".as_bytes())
-        {
-            Some(vec) => Some(from_slice(vec.as_ref()).expect("Could not load agent active queue")),
-            None => None,
-        };
-        assert!(
-            agent_active_queue_opt.is_none(),
-            "Should not have an active queue yet"
-        );
 
         // First registered agent becomes active
         let mut register_agent_res = contract_register_agent(AGENT0, &mut contract, deps.as_mut());

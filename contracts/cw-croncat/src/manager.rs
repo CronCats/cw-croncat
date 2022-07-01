@@ -2,6 +2,7 @@ use crate::error::ContractError;
 use crate::state::{Config, CwCroncat, QueueItem};
 use cosmwasm_std::{
     Addr, DepsMut, Empty, Env, MessageInfo, Reply, Response, StdResult, Storage, SubMsg,
+    SubMsgResult,
 };
 use cw_croncat_core::types::{Agent, SlotType};
 
@@ -30,41 +31,40 @@ impl<'a> CwCroncat<'a> {
 
         // only registered agent signed, because micropayments will benefit long term
         let agent_opt = self.agents.may_load(deps.storage, info.sender.clone())?;
-        if agent_opt.is_none() {
+        let agent = if let Some(agent) = agent_opt {
+            agent
+        } else {
             return Err(ContractError::AgentNotRegistered {});
-        }
-        let active_agents: Vec<Addr> = self
-            .agent_active_queue
-            .may_load(deps.storage)?
-            .unwrap_or_default();
+        };
+        let active_agents: Vec<Addr> = self.agent_active_queue.load(deps.storage)?;
 
         // make sure agent is active
         if !active_agents.contains(&info.sender) {
             return Err(ContractError::AgentNotRegistered {});
         }
-        let agent = agent_opt.unwrap();
-
         // get slot items, find the next task hash available
         // if empty slot found, let agent get paid for helping keep house clean
         let slot = self.get_current_slot_items(&env.block, deps.storage);
-        if slot.is_none() {
+        let (slot_id, slot_kind) = if let Some(slot) = slot {
+            slot
+        } else {
             self.send_base_agent_reward(deps.storage, agent);
             return Err(ContractError::CustomError {
                 val: "No Tasks For Slot".to_string(),
             });
-        }
-        let (slot_id, slot_kind) = slot.unwrap();
+        };
         let some_hash = self.pop_slot_item(deps.storage, &slot_id, &slot_kind);
-        if some_hash.is_none() {
-            self.send_base_agent_reward(deps.storage, agent);
-            return Err(ContractError::CustomError {
-                val: "No Tasks For Slot".to_string(),
-            });
-        }
 
         // Get the task details
         // if no task, exit and reward agent.
-        let hash = some_hash.unwrap();
+        let hash = if let Some(hash) = some_hash {
+            hash
+        } else {
+            self.send_base_agent_reward(deps.storage, agent);
+            return Err(ContractError::CustomError {
+                val: "No Tasks For Slot".to_string(),
+            });
+        };
         let some_task = self.tasks.may_load(deps.storage, hash.clone())?;
         if some_task.is_none() {
             // NOTE: This could should never get reached, however we cover just in case
@@ -200,21 +200,23 @@ impl<'a> CwCroncat<'a> {
 
         // check if reply had failure
         let mut reply_submsg_failed = false;
-        if msg.result.is_ok() {
-            for e in msg.result.unwrap().events {
-                for a in e.attributes {
-                    if e.ty == "reply"
-                        && a.clone().key == "mode"
-                        && a.clone().value == "handle_failure"
-                    {
-                        reply_submsg_failed = true;
+        match msg.result {
+            SubMsgResult::Ok(_) => {
+                for e in msg.result.unwrap().events {
+                    for a in e.attributes {
+                        if e.ty == "reply"
+                            && a.clone().key == "mode"
+                            && a.clone().value == "handle_failure"
+                        {
+                            reply_submsg_failed = true;
+                        }
                     }
                 }
             }
-        } else if msg.result.is_err() {
-            reply_submsg_failed = true;
+            SubMsgResult::Err(_) => {
+                reply_submsg_failed = true;
+            }
         }
-
         // reschedule next!
         if let Some(task) = self.tasks.may_load(deps.storage, task_hash)? {
             let task_hash = task.to_hash();
@@ -316,7 +318,7 @@ mod tests {
     use cw_multi_test::{App, AppBuilder, Contract, ContractWrapper, Executor};
     // use cw20::Balance;
     use crate::helpers::CwTemplateContract;
-    use cw_croncat_core::msg::{ExecuteMsg, InstantiateMsg, TaskRequest};
+    use cw_croncat_core::msg::{ExecuteMsg, InstantiateMsg, TaskRequest, UpdateSettings};
     use cw_croncat_core::types::{Action, Boundary, BoundarySpec, Interval};
 
     pub fn contract_template() -> Box<dyn Contract<Empty>> {
@@ -433,15 +435,17 @@ mod tests {
 
         // Create task paused
         let change_settings_msg = ExecuteMsg::UpdateSettings {
-            paused: Some(true),
-            owner_id: None,
-            // treasury_id: None,
-            agent_fee: None,
-            min_tasks_per_agent: None,
-            agents_eject_threshold: None,
-            gas_price: None,
-            proxy_callback_gas: None,
-            slot_granularity: None,
+            update_settings: UpdateSettings {
+                paused: Some(true),
+                owner_id: None,
+                // treasury_id: None,
+                agent_fee: None,
+                min_tasks_per_agent: None,
+                agents_eject_threshold: None,
+                gas_price: None,
+                proxy_callback_gas: None,
+                slot_granularity: None,
+            },
         };
         app.execute_contract(
             Addr::unchecked(ADMIN),
@@ -469,15 +473,17 @@ mod tests {
             Addr::unchecked(ADMIN),
             contract_addr.clone(),
             &ExecuteMsg::UpdateSettings {
-                paused: Some(false),
-                owner_id: None,
-                // treasury_id: None,
-                agent_fee: None,
-                min_tasks_per_agent: None,
-                agents_eject_threshold: None,
-                gas_price: None,
-                proxy_callback_gas: None,
-                slot_granularity: None,
+                update_settings: UpdateSettings {
+                    paused: Some(false),
+                    owner_id: None,
+                    // treasury_id: None,
+                    agent_fee: None,
+                    min_tasks_per_agent: None,
+                    agents_eject_threshold: None,
+                    gas_price: None,
+                    proxy_callback_gas: None,
+                    slot_granularity: None,
+                },
             },
             &vec![],
         )

@@ -1,6 +1,6 @@
 use crate::types::Agent;
 use crate::types::{Action, Boundary, GenericBalance, Interval, Rule, Task};
-use cosmwasm_std::{Addr, Coin, Timestamp};
+use cosmwasm_std::{Addr, Coin};
 use cw20::Balance;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -45,15 +45,7 @@ pub struct InstantiateMsg {
 #[serde(rename_all = "snake_case")]
 pub enum ExecuteMsg {
     UpdateSettings {
-        owner_id: Option<Addr>,
-        slot_granularity: Option<u64>,
-        paused: Option<bool>,
-        agent_fee: Option<Coin>,
-        gas_price: Option<u32>,
-        proxy_callback_gas: Option<u32>,
-        min_tasks_per_agent: Option<u64>,
-        agents_eject_threshold: Option<u64>,
-        // treasury_id: Option<Addr>,
+        update_settings: UpdateSettings,
     },
     MoveBalances {
         balances: Vec<Balance>,
@@ -129,7 +121,6 @@ pub struct ConfigResponse {
     pub proxy_callback_gas: u32,
     pub slot_granularity: u64,
     pub native_denom: String,
-    pub agent_nomination_begin_time: Option<Timestamp>,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, JsonSchema)]
@@ -148,6 +139,19 @@ pub struct GetAgentIdsResponse {
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, JsonSchema)]
 pub struct GetAgentTasksResponse(pub u64, pub u64);
+
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, JsonSchema)]
+pub struct UpdateSettings {
+    pub owner_id: Option<Addr>,
+    pub slot_granularity: Option<u64>,
+    pub paused: Option<bool>,
+    pub agent_fee: Option<Coin>,
+    pub gas_price: Option<u32>,
+    pub proxy_callback_gas: Option<u32>,
+    pub min_tasks_per_agent: Option<u64>,
+    pub agents_eject_threshold: Option<u64>,
+    // treasury_id: Option<Addr>,
+}
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, JsonSchema)]
 pub struct TaskRequest {

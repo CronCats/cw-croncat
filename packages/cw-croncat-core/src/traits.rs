@@ -1,10 +1,12 @@
 use crate::types::{Boundary, SlotType};
-use cosmwasm_std::{Addr, Env};
-use cw20::Balance;
+use cosmwasm_std::{Addr, Coin, Env};
+use cw20::Cw20CoinVerified;
 
 pub trait GenericBalances {
-    fn add_tokens(&mut self, add: Balance);
-    fn minus_tokens(&mut self, minus: Balance);
+    fn add_tokens(&mut self, balance: &[Coin]);
+    fn add_cw20tokens(&mut self, token: &Cw20CoinVerified);
+    fn minus_tokens(&mut self, balance: &[Coin]);
+    fn minus_cw20tokens(&mut self, token: &Cw20CoinVerified);
 }
 
 pub trait Intervals {
