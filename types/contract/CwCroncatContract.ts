@@ -291,6 +291,7 @@ export interface Rule {
 export interface Task {
   actions: ActionForEmpty[];
   boundary: BoundaryValidated;
+  funds_withdrawn_recurring: Uint128;
   interval: Interval;
   owner_id: Addr;
   rules?: Rule[] | null;
