@@ -1,7 +1,9 @@
 use crate::error::ContractError;
+use crate::helpers::ReplyMsgParser;
 use crate::state::{Config, CwCroncat, QueueItem};
 use cosmwasm_std::{
     Addr, DepsMut, Empty, Env, MessageInfo, Reply, Response, StdResult, Storage, SubMsg,
+    SubMsgResult,
 };
 use cw20::Balance;
 use cw_croncat_core::traits::Intervals;
@@ -94,6 +96,16 @@ impl<'a> CwCroncat<'a> {
         // ----------------------------------------------------
 
         let task = some_task.unwrap();
+
+        //Restrict bank msg so contract doesnt get drained
+        if task.is_recurring()
+            && task.contains_send_msg()
+            && !task.is_valid_msg(&env.contract.address, &info.sender, &c.owner_id)
+        {
+            return Err(ContractError::CustomError {
+                val: "Invalid process_call message!".to_string(),
+            });
+        }
 
         // TODO: Bring this back!
         // // Fee breakdown:
@@ -218,31 +230,28 @@ impl<'a> CwCroncat<'a> {
 
         // check if reply had failure
         let mut reply_submsg_failed = false;
-        if msg.result.is_ok() {
-            for e in msg.result.unwrap().events {
-                for a in e.attributes {
-                    if e.ty == "reply"
-                        && a.clone().key == "mode"
-                        && a.clone().value == "handle_failure"
-                    {
+        if let SubMsgResult::Ok(response) = &msg.result {
+            for e in &response.events {
+                for a in &e.attributes {
+                    if e.ty == "reply" && a.key == "mode" && a.value == "handle_failure" {
                         reply_submsg_failed = true;
                     }
                 }
             }
-        } else if msg.result.is_err() {
+        } else {
             reply_submsg_failed = true;
         }
 
         // reschedule next!
-        if let Some(task) = self.tasks.may_load(deps.storage, task_hash)? {
-            let task_hash = task.to_hash();
+        if let Some(task) = self.tasks.may_load(deps.storage, task_hash.clone())? {
+            let task_hash_str = task.to_hash();
             // TODO: How can we compute gas & fees paid on this txn?
             // let out_of_funds = call_total_balance > task.total_deposit;
 
             // if non-recurring, exit
             if task.stop_on_fail && reply_submsg_failed {
                 // Process task exit, if no future task can execute
-                let rt = self.remove_task(deps, task_hash);
+                let rt = self.remove_task(deps, task_hash_str);
                 if let Ok(..) = rt {
                     let resp = rt.unwrap();
                     response = response
@@ -258,7 +267,7 @@ impl<'a> CwCroncat<'a> {
 
             // If the next interval comes back 0, then this task should not schedule again
             if next_id == 0 {
-                let rt = self.remove_task(deps, task_hash.clone());
+                let rt = self.remove_task(deps, task_hash_str.clone());
                 if let Ok(..) = rt {
                     let resp = rt.unwrap();
                     response = response
@@ -266,8 +275,15 @@ impl<'a> CwCroncat<'a> {
                         .add_submessages(resp.messages)
                         .add_events(resp.events);
                 }
-                response = response.add_attribute("ended_task", task_hash);
+                response = response.add_attribute("ended_task", task_hash_str);
                 return Ok(response);
+            } else {
+                //If Send and reccuring task increment withdrawn funds so contract doesnt get drained
+                let _transferred_bank_tokens = msg.transferred_bank_tokens();
+                if task.contains_send_msg() && task.is_recurring() {
+                    //task.funds_withdrawn_recurring.saturating_add(msg..funds[0].amount);
+                    self.tasks.save(deps.storage, task_hash, &task)?;
+                }
             }
 
             response = response.add_attribute("slot_id", next_id.to_string());
@@ -347,7 +363,7 @@ impl<'a> CwCroncat<'a> {
 mod tests {
     use super::*;
     use cosmwasm_std::{
-        coin, coins, to_binary, Addr, BlockInfo, CosmosMsg, Empty, StakingMsg, WasmMsg,
+        coin, coins, to_binary, Addr, BankMsg, BlockInfo, CosmosMsg, Empty, StakingMsg, WasmMsg,
     };
     use cw_multi_test::{App, AppBuilder, Contract, ContractWrapper, Executor};
     // use cw20::Balance;
@@ -1373,5 +1389,61 @@ mod tests {
         );
         assert!(res.is_ok());
         Ok(())
+    }
+
+    #[test]
+    fn check_bank_msg() {
+        let (mut app, cw_template_contract) = proper_instantiate();
+        let contract_addr = cw_template_contract.addr();
+
+        let to_address = String::from("not_you");
+        let amount = coin(3, "atom");
+        let send = BankMsg::Send {
+            to_address,
+            amount: vec![amount],
+        };
+        let msg: CosmosMsg = send.clone().into();
+        let gas_limit = 150_000;
+        let agent_fee = 5;
+
+        let create_task_msg = ExecuteMsg::CreateTask {
+            task: TaskRequest {
+                interval: Interval::Immediate,
+                boundary: None,
+                stop_on_fail: false,
+                actions: vec![Action {
+                    msg,
+                    gas_limit: Some(gas_limit),
+                }],
+                rules: None,
+            },
+        };
+        // create 1 token off task
+        let amount_for_one_task = gas_limit + agent_fee;
+        // create a task
+        let res = app.execute_contract(
+            Addr::unchecked(ANYONE),
+            contract_addr.clone(),
+            &create_task_msg,
+            &coins(u128::from(amount_for_one_task * 2), "atom"),
+        );
+        assert!(res.is_ok());
+
+        // quick agent register
+        let msg = ExecuteMsg::RegisterAgent {
+            payable_account_id: Some(Addr::unchecked(AGENT1_BENEFICIARY)),
+        };
+        app.execute_contract(Addr::unchecked(AGENT0), contract_addr.clone(), &msg, &[])
+            .unwrap();
+
+        app.update_block(add_little_time);
+
+        app.execute_contract(
+            Addr::unchecked(AGENT0),
+            contract_addr.clone(),
+            &ExecuteMsg::ProxyCall {},
+            &[],
+        )
+        .unwrap();
     }
 }

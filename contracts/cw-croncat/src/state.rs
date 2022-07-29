@@ -166,7 +166,7 @@ mod tests {
     use crate::error::ContractError;
     use crate::helpers::Task;
     use cosmwasm_std::testing::MockStorage;
-    use cosmwasm_std::{coins, BankMsg, CosmosMsg, Order, StdResult};
+    use cosmwasm_std::{coins, BankMsg, CosmosMsg, Order, StdResult, Uint128};
     use cw_croncat_core::types::{Action, BoundaryValidated, Interval};
     use cw_storage_plus::Bound;
 
@@ -181,6 +181,8 @@ mod tests {
         let msg: CosmosMsg = bank.clone().into();
 
         let task = Task {
+            funds_withdrawn_recurring: Uint128::zero(),
+
             owner_id: Addr::unchecked("nobody".to_string()),
             interval: Interval::Immediate,
             boundary: BoundaryValidated {

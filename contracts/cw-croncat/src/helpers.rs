@@ -1,22 +1,37 @@
 use crate::state::Config;
 use crate::ContractError::AgentNotRegistered;
 use crate::{ContractError, CwCroncat};
-use cosmwasm_std::{to_binary, Addr, BankMsg, CosmosMsg, Env, StdResult, Storage, SubMsg, WasmMsg};
+use cosmwasm_std::{
+    to_binary, Addr, BankMsg, Coin, CosmosMsg, Env, StdResult, Storage, SubMsg, SubMsgResult,
+    WasmMsg,
+};
 use cw20::{Cw20CoinVerified, Cw20ExecuteMsg};
 use cw_croncat_core::msg::ExecuteMsg;
 use cw_croncat_core::types::AgentStatus;
 pub use cw_croncat_core::types::{GenericBalance, Task};
+//use regex::Regex;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use std::cmp;
 use std::ops::Div;
-
+//use std::str::FromStr;
 pub(crate) fn vect_difference<T: std::clone::Clone + std::cmp::PartialEq>(
     v1: &[T],
     v2: &[T],
 ) -> Vec<T> {
     v1.iter().filter(|&x| !v2.contains(x)).cloned().collect()
 }
+
+// pub(crate) fn from_raw_str(value: &str) -> Option<Coin> {
+//     let re = Regex::new(r"^([0-9.]+)([a-z][a-z0-9]*)$").unwrap();
+//     assert!(re.is_match(value));
+//     let caps = re.captures(value)?;
+//     let amount = caps.get(1).map_or("", |m| m.as_str());
+//     let denom = caps.get(2).map_or("", |m| m.as_str());
+//     assert!(denom.len() < 3 || denom.len() > 128);
+//     Some(Coin::new(u128::from_str(amount).unwrap(), denom))
+// }
+
 // Helper to distribute funds/tokens
 pub(crate) fn send_tokens(
     to: &Addr,
@@ -62,6 +77,37 @@ pub(crate) fn has_cw_coins(coins: &[Cw20CoinVerified], required: &Cw20CoinVerifi
         .find(|c| c.address == required.address)
         .map(|m| m.amount >= required.amount)
         .unwrap_or(false)
+}
+pub trait ReplyMsgParser {
+    fn transferred_bank_tokens(&self) -> Vec<cosmwasm_std::Coin>;
+}
+impl ReplyMsgParser for cosmwasm_std::Reply {
+    fn transferred_bank_tokens(&self) -> Vec<cosmwasm_std::Coin> {
+        if let SubMsgResult::Ok(res) = &self.result {
+            res.events
+                .iter()
+                .filter(|ev| ev.ty == "transfer")
+                .flat_map(|ev| {
+                    ev.attributes
+                        .iter()
+                        .filter_map(|attr| {
+                            attr.key.eq("amount").then(|| {
+                                // I really don't want to put regex here, it's gonna increase binary size way too much
+                                let n = attr.value.chars().position(|c| c.is_alphabetic()).unwrap();
+                                let (amount, denom) = attr.value.split_at(n);
+                                Coin {
+                                    amount: amount.parse().unwrap(),
+                                    denom: denom.to_owned(),
+                                }
+                            })
+                        })
+                        .collect::<Vec<Coin>>()
+                })
+                .collect()
+        } else {
+            Vec::new()
+        }
+    }
 }
 
 impl<'a> CwCroncat<'a> {
